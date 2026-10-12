@@ -4,7 +4,7 @@ Persistent SQLite checkpointer integration for LangGraph.
 
 import os
 import sqlite3
-from typing import List, Optional
+from typing import Any, List, Optional
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 
@@ -45,5 +45,17 @@ def list_saved_threads(db_path: str = "data/checkpoints.db") -> List[str]:
         threads = [row[0] for row in cursor.fetchall() if row[0]]
         conn.close()
         return threads
+    except Exception:
+        return []
+
+
+def get_thread_messages(saver: SqliteSaver, thread_id: str) -> List[Any]:
+    """Retrieve messages for a thread directly from SQLite checkpointer."""
+    try:
+        checkpoint_tuple = saver.get_tuple({"configurable": {"thread_id": thread_id}})
+        if not checkpoint_tuple or not checkpoint_tuple.checkpoint:
+            return []
+        channel_values = checkpoint_tuple.checkpoint.get("channel_values", {})
+        return channel_values.get("messages", [])
     except Exception:
         return []

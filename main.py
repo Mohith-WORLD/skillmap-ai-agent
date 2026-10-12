@@ -10,7 +10,7 @@ import sys
 import uuid
 from skillmap.config import load_config
 from skillmap.agent import build_agent, invoke_agent, get_conversation_history, extract_response_text
-from skillmap.memory import get_sqlite_saver, list_saved_threads
+from skillmap.memory import get_sqlite_saver, list_saved_threads, get_thread_messages
 
 
 def print_banner():
@@ -40,8 +40,8 @@ def show_status(config):
         print("Copy .env.example to .env and insert your API keys to enable live LLM and search tools.\n")
 
 
-def display_history(agent, thread_id: str):
-    history = get_conversation_history(agent, thread_id)
+def display_history(saver, thread_id: str):
+    history = get_thread_messages(saver, thread_id)
     if not history:
         print(f"\n[No message history found for thread: {thread_id}]\n")
         return
@@ -49,14 +49,17 @@ def display_history(agent, thread_id: str):
     print(f"\n=== Conversation History for Thread: {thread_id} ({len(history)} messages) ===")
     for idx, msg in enumerate(history, 1):
         role = getattr(msg, "type", "message").upper()
-        content = extract_response_text(msg.content)
+        content = extract_response_text(getattr(msg, "content", msg))
         print(f"\n[{idx}] {role}:")
         print(content)
     print("=========================================================================\n")
 
 
-def run_interactive(agent, config, thread_id: str):
+def run_interactive(agent, saver, config, thread_id: str):
     print(f"Active Thread ID: '{thread_id}'")
+    existing_history = get_thread_messages(saver, thread_id)
+    if existing_history:
+        print(f"[Thread Resumed] Recovered {len(existing_history)} existing message(s) from SQLite. Type 'history' to review.")
     print("Type your message below. Commands:")
     print("  'exit' or 'quit' : End current session")
     print("  'history'        : View full conversation history for this thread")
@@ -81,7 +84,7 @@ def run_interactive(agent, config, thread_id: str):
             break
 
         if user_input.lower() == "history":
-            display_history(agent, current_thread)
+            display_history(saver, current_thread)
             continue
 
         if user_input.lower() == "threads":
@@ -121,11 +124,22 @@ def main():
         show_status(config)
         return
 
+    # Checkpoint saver can be initialized without requiring external LLM API keys
+    try:
+        saver = get_sqlite_saver(config.sqlite_db_path)
+    except Exception as e:
+        print(f"Failed to initialize SQLite checkpointer: {e}")
+        sys.exit(1)
+
     if args.list_threads:
         threads = list_saved_threads(config.sqlite_db_path)
         print(f"Saved Thread IDs in '{config.sqlite_db_path}':")
         for t in threads:
             print(f"  - {t}")
+        return
+
+    if args.history:
+        display_history(saver, args.thread_id)
         return
 
     # Check credentials if executing query or running interactive
@@ -137,15 +151,10 @@ def main():
         sys.exit(1)
 
     try:
-        saver = get_sqlite_saver(config.sqlite_db_path)
         agent = build_agent(config=config, checkpointer=saver)
     except Exception as e:
         print(f"Failed to initialize agent: {e}")
         sys.exit(1)
-
-    if args.history:
-        display_history(agent, args.thread_id)
-        return
 
     if args.query:
         print(f"Querying thread '{args.thread_id}': {args.query}\n")
@@ -154,7 +163,7 @@ def main():
         return
 
     # Interactive loop
-    run_interactive(agent, config, args.thread_id)
+    run_interactive(agent, saver, config, args.thread_id)
 
 
 if __name__ == "__main__":
