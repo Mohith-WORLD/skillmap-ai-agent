@@ -90,8 +90,17 @@ def run_memory_verification(live: bool = False):
     saver_session1 = get_sqlite_saver(test_db_path)
     model_session1 = None if use_live else MockToolChatModel(responses=mock_responses[:2])
 
+    # Session config with isolated database and credentials
+    session_config = Config(
+        sqlite_db_path=test_db_path,
+        google_api_key=config.google_api_key,
+        tavily_api_key=config.tavily_api_key,
+        rapidapi_key=config.rapidapi_key,
+        model_name=config.model_name,
+    )
+
     agent_session1 = build_agent(
-        config=Config(sqlite_db_path=test_db_path, google_api_key=config.google_api_key),
+        config=session_config,
         checkpointer=saver_session1,
         model=model_session1,
     )
@@ -111,7 +120,7 @@ def run_memory_verification(live: bool = False):
     # Inspect Session 1 message count
     history_s1 = get_conversation_history(agent_session1, test_thread_id)
     print(f"\n[Session 1 Status] Messages recorded in memory: {len(history_s1)}")
-    assert len(history_s1) >= 4, f"Expected at least 4 messages (2 human, 2 AI), got {len(history_s1)}"
+    assert len(history_s1) >= 4, f"Expected at least 4 messages, got {len(history_s1)}"
 
     # --------------------------------------------------------------------------
     # PHASE 2: Application Restart Simulation
@@ -140,7 +149,7 @@ def run_memory_verification(live: bool = False):
     model_session2 = None if use_live else MockToolChatModel(responses=[mock_responses[2]])
 
     agent_session2 = build_agent(
-        config=Config(sqlite_db_path=test_db_path, google_api_key=config.google_api_key),
+        config=session_config,
         checkpointer=saver_session2,
         model=model_session2,
     )
@@ -156,20 +165,23 @@ def run_memory_verification(live: bool = False):
         f"Message count mismatch after restart! Expected {len(history_s1)}, got {len(history_s2)}"
     )
 
-    # Verify message content integrity
-    first_user_msg = extract_response_text(history_s2[0].content)
-    first_ai_msg = extract_response_text(history_s2[1].content)
-    second_user_msg = extract_response_text(history_s2[2].content)
-    second_ai_msg = extract_response_text(history_s2[3].content)
+    # Extract user queries from history (supports both direct and tool-calling traces)
+    user_msgs = [
+        extract_response_text(m.content) for m in history_s2 
+        if getattr(m, "type", "") == "human" or isinstance(m, HumanMessage)
+    ]
+    ai_msgs = [
+        extract_response_text(m.content) for m in history_s2 
+        if getattr(m, "type", "") in ("ai", "AIMessage") or isinstance(m, AIMessage)
+    ]
 
     print("\n[Integrity Check]")
-    print(f"  Turn 1 User Query Recovered : {first_user_msg[:60]}...")
-    print(f"  Turn 1 AI Response Recovered: {first_ai_msg[:60]}...")
-    print(f"  Turn 2 User Query Recovered : {second_user_msg[:60]}...")
-    print(f"  Turn 2 AI Response Recovered: {second_ai_msg[:60]}...")
+    print(f"  Turn 1 User Query Recovered : {user_msgs[0][:60]}...")
+    print(f"  Turn 2 User Query Recovered : {user_msgs[1][:60]}...")
+    print(f"  Total AI / Tool Responses   : {len(ai_msgs)} preserved")
 
-    assert query_1 in first_user_msg
-    assert query_2 in second_user_msg
+    assert query_1 in user_msgs[0]
+    assert query_2 in user_msgs[1]
 
     # Turn 3: Seamless continuation on existing thread
     query_3 = "What should I prepare for the interview for that role?"
